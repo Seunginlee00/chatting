@@ -1,6 +1,6 @@
 import express from "express";
 import http from "http"; // ✅ 수정
-import { emit } from "process";
+import { instrument } from "@socket.io/admin-ui";
 // import WebSocket from "ws";
 
 import SocketIO from "socket.io";
@@ -18,17 +18,47 @@ const handleListen = () => console.log(`Listening on http://localhost:3000`);
 
 // 서버부터 만듬 
 const httpServer = http.createServer(app);
-const wsServer = SocketIO(httpServer);
+const wsServer = new Server(httpServer, {
+  cors: {
+    origin: ["https://admin.socket.io"],
+    credentials: true,
+  },
+});
+
+instrument(wsServer, {
+  auth: false,
+});
+
+function publicRooms() {
+  const {
+    sockets: {
+      //  소켓 아이디랑 , 룸이름 
+      adapter: { sids, rooms },
+    },
+  } = wsServer;
+  const publicRooms = [];
+  rooms.forEach((_, key) => {
+    if (sids.get(key) === undefined) {
+      publicRooms.push(key);
+    }
+  });
+  return publicRooms;
+}
+
+function countRoom(roomName) {
+  return wsServer.sockets.adapter.rooms.get(roomName)?.size;
+}
 
 wsServer.on("connection", socket => {
     socket["nickname"] = "Anon";
       socket.onAny((event) => {
-        console.log(`Socket Event: ${event}`);
+        // console.log(`Socket Event: ${event}`);
       });
     socket.on("enter_room", (roomName, done) => {
       socket.join(roomName); // 방에는 room id가 있어 구분 가능 
       done();
-      socket.to(roomName).emit("welcome", socket.nickname);
+      socket.to(roomName).emit("welcome", socket.nickname, countRoom(roomName));
+      wsServer.sockets.emit("room_change", publicRooms());
       // setTimeout(()=>{
       //   done("hello, from the backend"); 
       //   // backend 가 실행시키는 게 아니라 프론트엔드가 backendDone 을 실행시킴,, 보안상의 문제래 쩝 
@@ -41,14 +71,16 @@ wsServer.on("connection", socket => {
     );
   });
 
+  socket.on("disconnect", () => {
+    wsServer.sockets.emit("room_change", publicRooms());
+  });
+
   socket.on("new_message", (msg,room,done) => {
     socket.to(room).emit("new_message", `${socket.nickname}: ${msg}`);
     done();
   });
 
   socket.on("nickname", (nickname) => (socket["nickname"] = nickname));
-
-
 
 });
 
